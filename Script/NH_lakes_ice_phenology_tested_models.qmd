@@ -1,0 +1,1406 @@
+---
+title: "NH_lakes_ice_phenology_tested_models"
+author: "Aman Basu"
+format: html
+editor: visual
+---
+
+## Libraries
+
+```{r}
+library(here) # path managment
+library(tidyverse) # data curatioin and visualization
+library(data.table) # fast reading and writing of data files
+
+library(tidymodels) # splitting training and testing data 
+library(ggpubr) # for plotting 
+library(caret) # Cross validation 
+library(doParallel) # parrallel processing
+
+library(rpart) # library for decision tree
+library(glmnet) # library for lasso/ridge/elastic_net regression
+library(randomForest) # random forest
+library(kernlab) # SVM
+library(mclust) # kNN
+library(nnet) #ANN
+```
+
+## input data
+
+```{r}
+# Ice-on 
+ice_on_dat <- fread(here::here("Data","ice_on_data_for_compairing_models.csv")) %>% select(-lat,-lon,-year)
+
+# Ice-off
+ice_off_dat <- fread(here::here("Data","ice_off_data_for_compairing_models.csv"))%>% select(-lat,-lon,-year)
+```
+
+## Training and Testing data
+
+```{r}
+# Ice-on
+set.seed(4596)
+data_split_ice_on <- initial_split(ice_on_dat, prop=0.75)
+NH_train_ice_on <- training(data_split_ice_on)
+NH_test_ice_on <- testing(data_split_ice_on)
+
+# Ice-off
+set.seed(4597)
+data_split_ice_off <- initial_split(ice_off_dat, prop=0.75)
+NH_train_ice_off <- training(data_split_ice_off)
+NH_test_ice_off <- testing(data_split_ice_off)
+
+```
+
+## Statistical models
+
+### Evaluation Matrices
+
+```{r}
+
+###### modified from: https://www.pluralsight.com/guides/linear-lasso-and-ridge-regression-with-r #########
+
+eval_results <- function(true, predicted) {
+  SSE <- sum((predicted - true)^2)
+  SST <- sum((true - mean(true))^2)
+  R_square <- 1 - SSE / SST
+  RMSE = sqrt(SSE/length(true))
+  MAE = sum(abs(true - predicted))/length(true)
+ 
+  
+  # Model performance metrics
+  tibble(RSquare = R_square,
+             RMSE = RMSE,
+             MAE = MAE)
+}
+
+#######
+```
+
+## Multiple linear regression
+
+### Ice-on
+
+```{r}
+#| warning: false
+
+
+custom <- trainControl(method = "CV",
+                       number = 10,
+                       verboseIter = TRUE)
+
+cl <- makeClusterPSOCK(detectCores()-1)
+registerDoParallel(cl)
+
+set.seed(2007)
+ice_on_lm <- caret::train(ice_on_doy_imputed~.,
+            NH_train_ice_on,
+            method='lm',
+            trControl=custom)
+
+stopCluster(cl)
+
+
+write_rds(ice_on_lm, here::here("Data","Models","compared","ice_on_linear_model.rds"))
+
+
+NH_ice_on_pred <- predict(ice_on_lm,newdata=NH_test_ice_on[, -1])
+NH_ice_on_pred <- as.data.frame(NH_ice_on_pred)
+
+
+eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)
+
+r_sq <-eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)[,1]
+rmse_ice_on <- eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)[,2]
+mae_ice_on <- eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)[,3]
+
+
+NH_ice_on_pred_actual <- bind_cols(NH_test_ice_on[,1],
+                                   NH_ice_on_pred) %>% 
+  rename("NH_ice_on_true" = "ice_on_doy_imputed")
+
+NH_ice_on_pred_actual %>%
+  ggplot(aes(NH_ice_on_pred, NH_ice_on_true))+
+  geom_point(aes(fill = "Data"))+
+  geom_smooth(method = "lm", se=FALSE, aes(color = "Fit"))+
+  stat_regline_equation(label.x= 25, label.y=150, color = "Maroon")+
+  stat_cor(aes(label=..rr.label..), label.x=25, label.y=145, color = "Maroon")+
+  geom_abline(intercept = 0, col = "Blue", size = .8)+
+  annotate(geom="text", x= 25+10, y=165, label= print(paste0("MAE = ", round(mae_ice_on, 2))),
+           color="Maroon")+
+  annotate(geom="text", x= 25+11, y=157, label=print(paste0("RMSE = ", round(rmse_ice_on, 2))),
+           color="Maroon")+
+  labs(x= "Predicted Dates",y= "Observed Dates", fill = "", col="", title = "Predictive performance plot of Ice-on dates ")+
+  theme(
+    axis.text = element_text(size = rel(1.5)),
+    axis.title.y = element_text(size = rel(2)),
+    axis.title.x = element_text(size = rel(2)),
+    legend.title = element_text( size = 17,vjust = .5),
+    legend.text = element_text(size = 14),
+    plot.title = element_text(size=22))+
+  scale_color_manual( values = c("Fit" = "red",
+                                 "X = Y" = "blue"))
+
+ggsave(here::here("Data","Models","compared","ice_on_linear_model.png"),  width = 8, height = 8, units = 'in', dpi = 300)
+
+```
+
+### Ice-off
+
+```{r}
+#| warning: false
+
+
+custom <- trainControl(method = "CV",
+                       number = 10,
+                       verboseIter = TRUE)
+
+cl <- makeClusterPSOCK(detectCores()-1)
+registerDoParallel(cl)
+
+set.seed(2007)
+ice_off_lm <- caret::train(ice_off_doy_imputed~.,
+            NH_train_ice_off,
+            method='lm',
+            trControl=custom)
+
+stopCluster(cl)
+
+ice_off_lm
+
+write_rds(ice_off_lm,here::here("Data","Models","compared","ice_off_linear_model.rds"))
+
+NH_ice_off_pred <- predict(ice_off_lm,newdata=NH_test_ice_off[, -1])
+NH_ice_off_pred <- as.data.frame(NH_ice_off_pred)
+
+
+eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)
+
+r_sq <-eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)[,1]
+rmse_ice_off <- eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)[,2]
+mae_ice_off <- eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)[,3]
+
+
+NH_ice_off_pred_actual <- bind_cols(NH_test_ice_off[,1],
+                                   NH_ice_off_pred) %>% 
+  rename("NH_ice_off_true" = "ice_off_doy_imputed")
+
+NH_ice_off_pred_actual %>%
+  ggplot(aes(NH_ice_off_pred, NH_ice_off_true))+
+  geom_point(aes(fill = "Data"))+
+  geom_smooth(method = "lm", se=FALSE, aes(color = "Fit"))+
+  stat_regline_equation(label.x= 32, label.y=150+50, color = "Maroon")+
+  stat_cor(aes(label=..rr.label..), label.x=32, label.y=145+50, color = "Maroon")+
+  geom_abline(intercept = 0, col = "Blue", size = .8)+
+  annotate(geom="text", x= 47, y=165+50, label= print(paste0("MAE = ", round(mae_ice_off, 2))),
+           color="Maroon")+
+  annotate(geom="text", x= 48, y=157+50, label=print(paste0("RMSE = ", round(rmse_ice_off, 2))),
+           color="Maroon")+
+  labs(x= "Predicted Dates",y= "Observed Dates", fill = "", col="", title = "Predictive performance plot of Ice-off dates ")+
+  theme(
+    axis.text = element_text(size = rel(1.5)),
+    axis.title.y = element_text(size = rel(2)),
+    axis.title.x = element_text(size = rel(2)),
+    legend.title = element_text( size = 17,vjust = .5),
+    legend.text = element_text(size = 14),
+    plot.title = element_text(size=22))+
+  scale_color_manual( values = c("Fit" = "red",
+                                 "X = Y" = "blue"))
+
+ggsave(here::here("Data","Models","compared","ice_off_linear_model.png"),  width = 8, height = 8, units = 'in', dpi = 300)
+
+```
+
+## Lasso regression
+
+### Ice-on
+
+```{r}
+#| warning: false
+
+
+# Ice-on
+
+ice_on_cv_lasso <- cv.glmnet(x=as.matrix(NH_train_ice_on[, -1]), 
+                y=NH_train_ice_on$ice_on_doy_imputed, alpha=1)
+
+plot(ice_on_cv_lasso) 
+
+ice_on_optimal_lambda <- ice_on_cv_lasso$lambda.min
+
+ice_on_optimal_lasso <- glmnet(x=as.matrix(NH_train_ice_on[, -1]), 
+                y=NH_train_ice_on$ice_on_doy_imputed, alpha=1, 
+                lambda= ice_on_optimal_lambda)
+
+write_rds(ice_on_optimal_lasso,here::here("Data","Models","compared","ice_on_lasso_model.rds"))
+
+
+
+NH_ice_on_pred <- predict(ice_on_optimal_lasso, 
+                          newx=as.matrix(NH_test_ice_on[, -1]),
+                          s=ice_on_optimal_lambda)
+
+eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)
+
+r_sq <-eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)[,1]
+rmse_ice_on <- eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)[,2]
+mae_ice_on <- eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)[,3]
+
+
+NH_ice_on_pred_actual <- bind_cols(NH_test_ice_on[,1],
+                                   NH_ice_on_pred) %>% 
+  rename("NH_ice_on_true" = "ice_on_doy_imputed",
+         "NH_ice_on_pred" = "s1")
+
+NH_ice_on_pred_actual %>%
+  ggplot(aes(NH_ice_on_pred, NH_ice_on_true))+
+  geom_point(aes(fill = "Data"))+
+  geom_smooth(method = "lm", se=FALSE, aes(color = "Fit"))+
+  stat_regline_equation(label.x= 25, label.y=150, color = "Maroon")+
+  stat_cor(aes(label=..rr.label..), label.x=25, label.y=145, color = "Maroon")+
+  geom_abline(intercept = 0, col = "Blue", size = .8)+
+  annotate(geom="text", x= 25+10, y=165, label= print(paste0("MAE = ", round(mae_ice_on, 2))),
+           color="Maroon")+
+  annotate(geom="text", x= 25+11, y=157, label=print(paste0("RMSE = ", round(rmse_ice_on, 2))),
+           color="Maroon")+
+  labs(x= "Predicted Dates",y= "Observed Dates", fill = "", col="", title = "Predictive performance plot of Ice-on dates ")+
+  theme(
+    axis.text = element_text(size = rel(1.5)),
+    axis.title.y = element_text(size = rel(2)),
+    axis.title.x = element_text(size = rel(2)),
+    legend.title = element_text( size = 17,vjust = .5),
+    legend.text = element_text(size = 14),
+    plot.title = element_text(size=22))+
+  scale_color_manual( values = c("Fit" = "red",
+                                 "X = Y" = "blue"))
+
+ggsave(here::here("Data","Models","compared","ice_on_lasso_model.png"),  width = 8, height = 8, units = 'in', dpi = 300)
+```
+
+### Ice-off
+
+```{r}
+#| warning: false
+
+
+# ice-off
+
+ice_off_cv_lasso <- cv.glmnet(x=as.matrix(NH_train_ice_off[, -1]), 
+                y=NH_train_ice_off$ice_off_doy_imputed, alpha=1)
+
+plot(ice_off_cv_lasso) 
+
+ice_off_optimal_lambda <- ice_off_cv_lasso$lambda.min
+
+ice_off_optimal_lasso <- glmnet(x=as.matrix(NH_train_ice_off[, -1]), 
+                y=NH_train_ice_off$ice_off_doy_imputed, alpha=1, 
+                lambda= ice_off_optimal_lambda)
+
+write_rds(ice_off_optimal_lasso,here::here("Data","Models","compared","ice_off_lasso_model.rds"))
+
+
+NH_ice_off_pred <- predict(ice_off_optimal_lasso, 
+                          newx=as.matrix(NH_test_ice_off[, -1]),
+                          s=ice_off_optimal_lambda)
+
+eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)
+
+r_sq <- eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)[,1]
+rmse_ice_off <- eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)[,2]
+mae_ice_off <- eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)[,3]
+
+
+
+
+NH_ice_off_pred_actual <- bind_cols(NH_test_ice_off[,1],
+                                   NH_ice_off_pred) %>% 
+  rename("NH_ice_off_true" = "ice_off_doy_imputed",
+         "NH_ice_off_pred" = "s1")
+
+NH_ice_off_pred_actual %>%
+  ggplot(aes(NH_ice_off_pred, NH_ice_off_true))+
+  geom_point(aes(fill = "Data"))+
+  geom_smooth(method = "lm", se=FALSE, aes(color = "Fit"))+
+  stat_regline_equation(label.x= 32, label.y=150+50, color = "Maroon")+
+  stat_cor(aes(label=..rr.label..), label.x=32, label.y=145+50, color = "Maroon")+
+  geom_abline(intercept = 0, col = "Blue", size = .8)+
+  annotate(geom="text", x= 47, y=165+50, label= print(paste0("MAE = ", round(mae_ice_off, 2))),
+           color="Maroon")+
+  annotate(geom="text", x= 48, y=157+50, label=print(paste0("RMSE = ", round(rmse_ice_off, 2))),
+           color="Maroon")+
+  labs(x= "Predicted Dates",y= "Observed Dates", fill = "", col="", title = "Predictive performance plot of Ice-off dates ")+
+  theme(
+    axis.text = element_text(size = rel(1.5)),
+    axis.title.y = element_text(size = rel(2)),
+    axis.title.x = element_text(size = rel(2)),
+    legend.title = element_text( size = 17,vjust = .5),
+    legend.text = element_text(size = 14),
+    plot.title = element_text(size=22))+
+  scale_color_manual( values = c("Fit" = "red",
+                                 "X = Y" = "blue"))
+
+ggsave(here::here("Data","Models","compared","ice_off_lasso_model.png"),  width = 8, height = 8, units = 'in', dpi = 300)
+
+```
+
+## Ridge regression
+
+### Ice-on
+
+```{r}
+#| warning: false
+
+
+# Ice-on
+
+ice_on_cv_ridge <- cv.glmnet(x=as.matrix(NH_train_ice_on[, -1]), 
+                y=NH_train_ice_on$ice_on_doy_imputed, alpha=0)
+
+plot(ice_on_cv_ridge) 
+
+ice_on_optimal_lambda <- ice_on_cv_ridge$lambda.min
+
+ice_on_optimal_ridge <- glmnet(x=as.matrix(NH_train_ice_on[, -1]), 
+                y=NH_train_ice_on$ice_on_doy_imputed, alpha=0, 
+                lambda= ice_on_optimal_lambda)
+
+write_rds(ice_on_optimal_ridge,here::here("Data","Models","compared","ice_on_ridge_model.rds"))
+
+NH_ice_on_pred <- predict(ice_on_optimal_ridge, 
+                          newx=as.matrix(NH_test_ice_on[, -1]),
+                          s=ice_on_optimal_lambda)
+
+eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)
+
+r_sq <-eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)[,1]
+rmse_ice_on <- eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)[,2]
+mae_ice_on <- eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)[,3]
+
+
+NH_ice_on_pred_actual <- bind_cols(NH_test_ice_on[,1],
+                                   NH_ice_on_pred) %>% 
+  rename("NH_ice_on_true" = "ice_on_doy_imputed",
+         "NH_ice_on_pred" = "s1")
+
+NH_ice_on_pred_actual %>%
+  ggplot(aes(NH_ice_on_pred, NH_ice_on_true))+
+  geom_point(aes(fill = "Data"))+
+  geom_smooth(method = "lm", se=FALSE, aes(color = "Fit"))+
+  stat_regline_equation(label.x= 32-10, label.y=150, color = "Maroon")+
+  stat_cor(aes(label=..rr.label..), label.x=32-10, label.y=145, color = "Maroon")+
+  geom_abline(intercept = 0, col = "Blue", size = .8)+
+  annotate(geom="text", x= 47-10, y=165, label= print(paste0("MAE = ", round(mae_ice_on, 2))),
+           color="Maroon")+
+  annotate(geom="text", x= 48-10, y=157, label=print(paste0("RMSE = ", round(rmse_ice_on, 2))),
+           color="Maroon")+
+  labs(x= "Predicted Dates",y= "Observed Dates", fill = "", col="", title = "Predictive performance plot of Ice-on dates ")+
+  theme(
+    axis.text = element_text(size = rel(1.5)),
+    axis.title.y = element_text(size = rel(2)),
+    axis.title.x = element_text(size = rel(2)),
+    legend.title = element_text( size = 17,vjust = .5),
+    legend.text = element_text(size = 14),
+    plot.title = element_text(size=22))+
+  scale_color_manual( values = c("Fit" = "red",
+                                 "X = Y" = "blue"))
+
+ggsave(here::here("Data","Models","compared","ice_on_ridge_model.png"),  width = 8, height = 8, units = 'in', dpi = 300)
+```
+
+### Ice-off
+
+```{r}
+#| warning: false
+
+
+# ice-off
+
+
+ice_off_cv_ridge <- cv.glmnet(x=as.matrix(NH_train_ice_off[, -1]), 
+                y=NH_train_ice_off$ice_off_doy_imputed, alpha=0)
+
+plot(ice_off_cv_ridge) 
+
+ice_off_optimal_lambda <- ice_off_cv_ridge$lambda.min
+
+ice_off_optimal_ridge <- glmnet(x=as.matrix(NH_train_ice_off[, -1]), 
+                y=NH_train_ice_off$ice_off_doy_imputed, alpha=0, 
+                lambda= ice_off_optimal_lambda)
+
+write_rds(ice_off_optimal_ridge,here::here("Data","Models","compared","ice_off_ridge_model.rds"))
+
+NH_ice_off_pred <- predict(ice_off_optimal_ridge, 
+                          newx=as.matrix(NH_test_ice_off[, -1]),
+                          s=ice_off_optimal_lambda)
+
+eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)
+
+r_sq <- eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)[,1]
+rmse_ice_off <- eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)[,2]
+mae_ice_off <- eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)[,3]
+
+
+
+
+NH_ice_off_pred_actual <- bind_cols(NH_test_ice_off[,1],
+                                   NH_ice_off_pred) %>% 
+  rename("NH_ice_off_true" = "ice_off_doy_imputed",
+         "NH_ice_off_pred" = "s1")
+
+NH_ice_off_pred_actual %>%
+  ggplot(aes(NH_ice_off_pred, NH_ice_off_true))+
+  geom_point(aes(fill = "Data"))+
+  geom_smooth(method = "lm", se=FALSE, aes(color = "Fit"))+
+  stat_regline_equation(label.x= 32, label.y=150, color = "Maroon")+
+  stat_cor(aes(label=..rr.label..), label.x=32, label.y=145, color = "Maroon")+
+  geom_abline(intercept = 0, col = "Blue", size = .8)+
+  annotate(geom="text", x= 47, y=165, label= print(paste0("MAE = ", round(mae_ice_off, 2))),
+           color="Maroon")+
+  annotate(geom="text", x= 48, y=157, label=print(paste0("RMSE = ", round(rmse_ice_off, 2))),
+           color="Maroon")+
+  labs(x= "Predicted Dates",y= "Observed Dates", fill = "", col="", title = "Predictive performance plot of Ice-off dates ")+
+  theme(
+    axis.text = element_text(size = rel(1.5)),
+    axis.title.y = element_text(size = rel(2)),
+    axis.title.x = element_text(size = rel(2)),
+    legend.title = element_text( size = 17,vjust = .5),
+    legend.text = element_text(size = 14),
+    plot.title = element_text(size=22))+
+  scale_color_manual( values = c("Fit" = "red",
+                                 "X = Y" = "blue"))
+ggsave(here::here("Data","Models","compared","ice_off_ridge_model.png"),  width = 8, height = 8, units = 'in', dpi = 300)
+```
+
+## Elastic-net regression
+
+### Ice-on
+
+```{r}
+#| warning: false
+
+custom <- trainControl(method = "repeatedcv",
+                       number = 10,
+                       repeats = 5,
+                       verboseIter = TRUE)
+
+
+cl <- makeCluster(detectCores()-1)
+registerDoParallel(cl)
+
+set.seed(2007)
+ice_on_en <- caret::train(ice_on_doy_imputed~.,
+            NH_train_ice_on,
+            method='glmnet',
+            tuneGrid =expand.grid(alpha=seq(0,1,length=100),
+                                  lambda = seq(0.0001,0.2,length=100)),
+            trControl=custom)
+
+stopCluster(cl)
+
+write_rds(ice_on_en ,here::here("Data","Models","compared","ice_on_elastic_net_model.rds"))
+
+```
+
+```{r}
+#| warning: false
+#| eval: false
+
+
+ice_on_en <- read_rds(here::here("Data","Models","compared","ice_on_elastic_net_model.rds"))
+
+NH_ice_on_pred <- tibble(s1 = predict(ice_on_en,NH_test_ice_on[, -1]))
+
+eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)
+
+r_sq <-eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)[,1]
+rmse_ice_on <- eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)[,2]
+mae_ice_on <- eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)[,3]
+
+
+
+NH_ice_on_pred_actual <- bind_cols(NH_test_ice_on[,1],
+                                   NH_ice_on_pred) %>% 
+  rename("NH_ice_on_true" = "ice_on_doy_imputed",
+         "NH_ice_on_pred" = "s1")
+
+NH_ice_on_pred_actual %>%
+  ggplot(aes(NH_ice_on_pred, NH_ice_on_true))+
+  geom_point(aes(fill = "Data"))+
+  geom_smooth(method = "lm", se=FALSE, aes(color = "Fit"))+
+  stat_regline_equation(label.x= 32, label.y=150, color = "Maroon")+
+  stat_cor(aes(label=..rr.label..), label.x=32, label.y=145, color = "Maroon")+
+  geom_abline(intercept = 0, col = "Blue", size = .8)+
+  annotate(geom="text", x= 47, y=165, label= print(paste0("MAE = ", round(mae_ice_on, 2))),
+           color="Maroon")+
+  annotate(geom="text", x= 48, y=157, label=print(paste0("RMSE = ", round(rmse_ice_on, 2))),
+           color="Maroon")+
+  labs(x= "Predicted Dates",y= "Observed Dates", fill = "", col="", title = "Predictive performance plot of Ice-on dates ")+
+  theme(
+    axis.text = element_text(size = rel(1.5)),
+    axis.title.y = element_text(size = rel(2)),
+    axis.title.x = element_text(size = rel(2)),
+    legend.title = element_text( size = 17,vjust = .5),
+    legend.text = element_text(size = 14),
+    plot.title = element_text(size=22))+
+  scale_color_manual( values = c("Fit" = "red",
+                                 "X = Y" = "blue"))
+
+ggsave(here::here("Data","Models","compared","ice_on_elastic_net_model.png"),  width = 8, height = 8, units = 'in', dpi = 300)
+```
+
+### Ice-off
+
+```{r}
+#| warning: false
+
+custom <- trainControl(method = "repeatedcv",
+                       number = 10,
+                       repeats = 5,
+                       verboseIter = TRUE)
+
+
+cl <- makeCluster(detectCores()-1)
+registerDoParallel(cl)
+
+set.seed(2007)
+ice_off_en <- caret::train(ice_off_doy_imputed~.,
+            NH_train_ice_off,
+            method='glmnet',
+            tuneGrid =expand.grid(alpha=seq(0,1,length=100),
+                                  lambda = seq(0.0001,0.2,length=100)),
+            trControl=custom)
+
+stopCluster(cl)
+
+write_rds(ice_off_en ,here::here("Data","Models","compared","ice_off_elastic_net_model.rds"))
+
+
+```
+
+```{r}
+#| warning: false
+
+
+ice_off_en <- read_rds(here::here("Data","Models","compared","ice_off_elastic_net_model.rds"))
+
+NH_ice_off_pred <- tibble(s1 = predict(ice_off_en,NH_test_ice_off[, -1]))
+
+eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)
+
+
+r_sq <- eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)[,1]
+rmse_ice_off <- eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)[,2]
+mae_ice_off <- eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)[,3]
+
+
+
+NH_ice_off_pred_actual <- bind_cols(NH_test_ice_off[,1],
+                                   NH_ice_off_pred) %>% 
+  rename("NH_ice_off_true" = "ice_off_doy_imputed",
+         "NH_ice_off_pred" = "s1")
+
+NH_ice_off_pred_actual %>%
+  ggplot(aes(NH_ice_off_pred, NH_ice_off_true))+
+  geom_point(aes(fill = "Data"))+
+  geom_smooth(method = "lm", se=FALSE, aes(color = "Fit"))+
+  stat_regline_equation(label.x= 32, label.y=150, color = "Maroon")+
+  stat_cor(aes(label=..rr.label..), label.x=32, label.y=145, color = "Maroon")+
+  geom_abline(intercept = 0, col = "Blue", size = .8)+
+  annotate(geom="text", x= 47, y=165, label= print(paste0("MAE = ", round(mae_ice_off, 2))),
+           color="Maroon")+
+  annotate(geom="text", x= 48, y=157, label=print(paste0("RMSE = ", round(rmse_ice_off, 2))),
+           color="Maroon")+
+  labs(x= "Predicted Dates",y= "Observed Dates", fill = "", col="", title = "Predictive performance plot of Ice-off dates ")+
+  theme(
+    axis.text = element_text(size = rel(1.5)),
+    axis.title.y = element_text(size = rel(2)),
+    axis.title.x = element_text(size = rel(2)),
+    legend.title = element_text( size = 17,vjust = .5),
+    legend.text = element_text(size = 14),
+    plot.title = element_text(size=22))+
+  scale_color_manual( values = c("Fit" = "red",
+                                 "X = Y" = "blue"))
+
+ggsave(here::here("Data","Models","compared","ice_off_elastic_net_model.png"),  width = 8, height = 8, units = 'in', dpi = 300)
+
+```
+
+# Machine learning models
+
+## Decision tree
+
+### Ice-on
+
+```{r}
+#| warning: false
+#| eval: false
+
+custom <- trainControl(method = "repeatedcv",
+                       number = 10,
+                       repeats = 5,
+                       verboseIter = TRUE)
+
+
+cl <- makeCluster(detectCores()-1)
+registerDoParallel(cl)
+
+set.seed(2007)
+ice_on_dt <- caret::train(ice_on_doy_imputed~.,
+            NH_train_ice_on,
+            method='rpart2',
+            tuneGrid = expand.grid(maxdepth = seq(1,20,length=20)),
+            trControl=custom)
+
+stopCluster(cl)
+
+write_rds(ice_on_dt,here::here("Data","Models","compared","ice_on_decision_tree_model.rds"))
+
+
+```
+
+```{r}
+#| warning: false
+
+
+ice_on_dt <- read_rds(here::here("Data","Models","compared","ice_on_decision_tree_model.rds"))
+
+NH_ice_on_pred <- tibble(s1 = predict(ice_on_dt,NH_test_ice_on[, -1]))
+
+eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)
+
+r_sq <-eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)[,1]
+rmse_ice_on <- eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)[,2]
+mae_ice_on <- eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)[,3]
+
+
+
+NH_ice_on_pred_actual <- bind_cols(NH_test_ice_on[,1],
+                                   NH_ice_on_pred) %>% 
+  rename("NH_ice_on_true" = "ice_on_doy_imputed",
+         "NH_ice_on_pred" = "s1")
+
+NH_ice_on_pred_actual %>%
+  ggplot(aes(NH_ice_on_pred, NH_ice_on_true))+
+  geom_point(aes(fill = "Data"))+
+  geom_smooth(method = "lm", se=FALSE, aes(color = "Fit"))+
+  stat_regline_equation(label.x= 32, label.y=150, color = "Maroon")+
+  stat_cor(aes(label=..rr.label..), label.x=32, label.y=145, color = "Maroon")+
+  geom_abline(intercept = 0, col = "Blue", size = .8)+
+  annotate(geom="text", x= 47, y=165, label= print(paste0("MAE = ", round(mae_ice_on, 2))),
+           color="Maroon")+
+  annotate(geom="text", x= 48, y=157, label=print(paste0("RMSE = ", round(rmse_ice_on, 2))),
+           color="Maroon")+
+  labs(x= "Predicted Dates",y= "Observed Dates", fill = "", col="", title = "Predictive performance plot of Ice-on dates ")+
+  theme(
+    axis.text = element_text(size = rel(1.5)),
+    axis.title.y = element_text(size = rel(2)),
+    axis.title.x = element_text(size = rel(2)),
+    legend.title = element_text( size = 17,vjust = .5),
+    legend.text = element_text(size = 14),
+    plot.title = element_text(size=22))+
+  scale_color_manual( values = c("Fit" = "red",
+                                 "X = Y" = "blue"))
+
+ggsave(here::here("Data","Models","compared","ice_on_decision_tree_model.png"),  width = 8, height = 8, units = 'in', dpi = 300)
+```
+
+### Ice-off
+
+```{r}
+
+#| warning: false
+
+custom <- trainControl(method = "repeatedcv",
+                       number = 10,
+                       repeats = 5,
+                       verboseIter = TRUE)
+
+
+cl <- makeCluster(detectCores()-1)
+registerDoParallel(cl)
+
+set.seed(2007)
+ice_off_dt <- caret::train(ice_off_doy_imputed~.,
+            NH_train_ice_off,
+            method='rpart2',
+            tuneGrid =expand.grid(maxdepth = seq(1,20,length=20)),
+            trControl=custom)
+
+stopCluster(cl)
+
+write_rds(ice_off_dt, here::here("Data","Models","compared","ice_off_decision_tree_model.rds"))
+
+```
+
+```{r}
+#| warning: false
+
+
+ice_off_dt <- read_rds(here::here("Data","Models","compared","ice_off_decision_tree_model.rds"))
+
+NH_ice_off_pred <- tibble(s1 = predict(ice_off_dt,NH_test_ice_off[, -1]))
+
+eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)
+
+
+r_sq <- eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)[,1]
+rmse_ice_off <- eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)[,2]
+mae_ice_off <- eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)[,3]
+
+
+
+NH_ice_off_pred_actual <- bind_cols(NH_test_ice_off[,1],
+                                   NH_ice_off_pred) %>% 
+  rename("NH_ice_off_true" = "ice_off_doy_imputed",
+         "NH_ice_off_pred" = "s1")
+
+NH_ice_off_pred_actual %>%
+  ggplot(aes(NH_ice_off_pred, NH_ice_off_true))+
+  geom_point(aes(fill = "Data"))+
+  geom_smooth(method = "lm", se=FALSE, aes(color = "Fit"))+
+  stat_regline_equation(label.x= 32, label.y=150, color = "Maroon")+
+  stat_cor(aes(label=..rr.label..), label.x=32, label.y=145, color = "Maroon")+
+  geom_abline(intercept = 0, col = "Blue", size = .8)+
+  annotate(geom="text", x= 47, y=165, label= print(paste0("MAE = ", round(mae_ice_off, 2))),
+           color="Maroon")+
+  annotate(geom="text", x= 48, y=157, label=print(paste0("RMSE = ", round(rmse_ice_off, 2))),
+           color="Maroon")+
+  labs(x= "Predicted Dates",y= "Observed Dates", fill = "", col="", title = "Predictive performance plot of Ice-off dates ")+
+  theme(
+    axis.text = element_text(size = rel(1.5)),
+    axis.title.y = element_text(size = rel(2)),
+    axis.title.x = element_text(size = rel(2)),
+    legend.title = element_text( size = 17,vjust = .5),
+    legend.text = element_text(size = 14),
+    plot.title = element_text(size=22))+
+  scale_color_manual( values = c("Fit" = "red",
+                                 "X = Y" = "blue"))
+
+ggsave(here::here("Data","Models","compared","ice_off_decision_tree_model.png"),  width = 8, height = 8, units = 'in', dpi = 300)
+```
+
+## Random forest
+
+### Ice-on
+
+```{r}
+#| warning: false
+
+custom <- trainControl(method = "repeatedcv",
+                       number = 10,
+                       repeats = 5,
+                       verboseIter = TRUE)
+
+
+cl <- makeClusterPSOCK(detectCores()-1)
+registerDoParallel(cl)
+
+set.seed(2007)
+ice_on_rf <- caret::train(ice_on_doy_imputed~.,
+            NH_train_ice_on,
+            method='rf',
+            ntree = 500,
+            tuneGrid = expand.grid(.mtry=c(1:6)),
+            trControl=custom)
+
+stopCluster(cl)
+
+write_rds(ice_on_rf ,here::here("Data","Models","compared","ice_on_random_forest_model.rds"))
+
+```
+
+```{r}
+#| warning: false
+
+ice_on_dt <- read_rds(here::here("Data","Models","compared","ice_on_random_forest_model.rds"))
+
+NH_ice_on_pred <- tibble(s1 = predict(ice_on_dt,NH_test_ice_on[, -1]))
+
+eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)
+
+r_sq <-eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)[,1]
+rmse_ice_on <- eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)[,2]
+mae_ice_on <- eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)[,3]
+
+
+
+NH_ice_on_pred_actual <- bind_cols(NH_test_ice_on[,1],
+                                   NH_ice_on_pred) %>% 
+  rename("NH_ice_on_true" = "ice_on_doy_imputed",
+         "NH_ice_on_pred" = "s1")
+
+NH_ice_on_pred_actual %>%
+  ggplot(aes(NH_ice_on_pred, NH_ice_on_true))+
+  geom_point(aes(fill = "Data"))+
+  geom_smooth(method = "lm", se=FALSE, aes(color = "Fit"))+
+  stat_regline_equation(label.x= 32, label.y=150, color = "Maroon")+
+  stat_cor(aes(label=..rr.label..), label.x=32, label.y=145, color = "Maroon")+
+  geom_abline(intercept = 0, col = "Blue", size = .8)+
+  annotate(geom="text", x= 47, y=165, label= print(paste0("MAE = ", round(mae_ice_on, 2))),
+           color="Maroon")+
+  annotate(geom="text", x= 48, y=157, label=print(paste0("RMSE = ", round(rmse_ice_on, 2))),
+           color="Maroon")+
+  labs(x= "Predicted Dates",y= "Observed Dates", fill = "", col="", title = "Predictive performance plot of Ice-on dates ")+
+  theme(
+    axis.text = element_text(size = rel(1.5)),
+    axis.title.y = element_text(size = rel(2)),
+    axis.title.x = element_text(size = rel(2)),
+    legend.title = element_text( size = 17,vjust = .5),
+    legend.text = element_text(size = 14),
+    plot.title = element_text(size=22))+
+  scale_color_manual( values = c("Fit" = "red",
+                                 "X = Y" = "blue"))
+
+ggsave(here::here("Data","Models","compared","ice_on_random_forest_model.png"),  width = 8, height = 8, units = 'in', dpi = 300)
+```
+
+### Ice-off
+
+```{r}
+#| warning: false
+#| eval: false
+
+
+custom <- trainControl(method = "repeatedcv",
+                       number = 10,
+                       repeats = 5,
+                       verboseIter = TRUE)
+
+
+cl <- makeClusterPSOCK(detectCores()-1)
+registerDoParallel(cl)
+
+set.seed(2007)
+ice_off_rf <- caret::train(ice_off_doy_imputed~.,
+            NH_train_ice_off,
+            method='rf',
+            ntree = 500,
+            tuneGrid = expand.grid(.mtry=c(1:6)),
+            trControl=custom)
+
+stopCluster(cl)
+
+write_rds(ice_off_rf ,here::here("Data","Models","compared","ice_off_random_forest_model.rds"))
+
+
+```
+
+```{r}
+#| warning: false
+#| eval: false
+
+ice_off_rf <- read_rds(here::here("Data","Models","compared","ice_off_random_forest_model.rds"))
+
+NH_ice_off_pred <- tibble(s1 = predict(ice_off_rf,NH_test_ice_off[, -1]))
+
+eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)
+
+
+r_sq <- eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)[,1]
+rmse_ice_off <- eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)[,2]
+mae_ice_off <- eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)[,3]
+
+
+
+NH_ice_off_pred_actual <- bind_cols(NH_test_ice_off[,1],
+                                   NH_ice_off_pred) %>% 
+  rename("NH_ice_off_true" = "ice_off_doy_imputed",
+         "NH_ice_off_pred" = "s1")
+
+NH_ice_off_pred_actual %>%
+  ggplot(aes(NH_ice_off_pred, NH_ice_off_true))+
+  geom_point(aes(fill = "Data"))+
+  geom_smooth(method = "lm", se=FALSE, aes(color = "Fit"))+
+  stat_regline_equation(label.x= 32, label.y=150, color = "Maroon")+
+  stat_cor(aes(label=..rr.label..), label.x=32, label.y=145, color = "Maroon")+
+  geom_abline(intercept = 0, col = "Blue", size = .8)+
+  annotate(geom="text", x= 47, y=165, label= print(paste0("MAE = ", round(mae_ice_off, 2))),
+           color="Maroon")+
+  annotate(geom="text", x= 48, y=157, label=print(paste0("RMSE = ", round(rmse_ice_off, 2))),
+           color="Maroon")+
+  labs(x= "Predicted Dates",y= "Observed Dates", fill = "", col="", title = "Predictive performance plot of Ice-off dates ")+
+  theme(
+    axis.text = element_text(size = rel(1.5)),
+    axis.title.y = element_text(size = rel(2)),
+    axis.title.x = element_text(size = rel(2)),
+    legend.title = element_text( size = 17,vjust = .5),
+    legend.text = element_text(size = 14),
+    plot.title = element_text(size=22))+
+  scale_color_manual( values = c("Fit" = "red",
+                                 "X = Y" = "blue"))
+
+ggsave(here::here("Data","Models","compared","ice_off_random_forest_model.png"),  width = 8, height = 8, units = 'in', dpi = 300)
+```
+
+## Support vector machine
+
+### Ice-on
+
+```{r}
+#| warning: false
+#| eval: false
+
+custom <- trainControl(method = "repeatedcv",
+                       number = 10,
+                       repeats = 5,
+                       verboseIter = TRUE)
+
+
+cl <- makeCluster(detectCores()-1)
+registerDoParallel(cl)
+
+
+set.seed(2007)
+ice_on_svm <- caret::train(ice_on_doy_imputed~.,
+                   NH_train_ice_on,
+                   method='svmRadial',
+                   preProcess = c("center", "scale"),
+                   tuneGrid = expand.grid(C = c(0.75, 0.9, 1, 1.1, 1.25),
+                                          sigma = c(.01, .015, 0.2)),
+                   trControl=custom,
+                   allowParallel = TRUE)
+
+stopCluster(cl)
+
+write_rds(ice_on_svm,here::here("Data","Models","compared","ice_on_svm_model.rds"))
+
+
+
+```
+
+```{r}
+#| warning: false
+#| eval: false
+
+ice_on_dt <- read_rds(here::here("Data","Models","compared","ice_on_svm_model.rds"))
+
+NH_ice_on_pred <- tibble(s1 = predict(ice_on_dt,NH_test_ice_on[, -1]))
+
+eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)
+
+r_sq <-eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)[,1]
+rmse_ice_on <- eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)[,2]
+mae_ice_on <- eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)[,3]
+
+
+
+NH_ice_on_pred_actual <- bind_cols(NH_test_ice_on[,1],
+                                   NH_ice_on_pred) %>% 
+  rename("NH_ice_on_true" = "ice_on_doy_imputed",
+         "NH_ice_on_pred" = "s1")
+
+NH_ice_on_pred_actual %>%
+  ggplot(aes(NH_ice_on_pred, NH_ice_on_true))+
+  geom_point(aes(fill = "Data"))+
+  geom_smooth(method = "lm", se=FALSE, aes(color = "Fit"))+
+  stat_regline_equation(label.x= 32, label.y=150, color = "Maroon")+
+  stat_cor(aes(label=..rr.label..), label.x=32, label.y=145, color = "Maroon")+
+  geom_abline(intercept = 0, col = "Blue", size = .8)+
+  annotate(geom="text", x= 47, y=165, label= print(paste0("MAE = ", round(mae_ice_on, 2))),
+           color="Maroon")+
+  annotate(geom="text", x= 48, y=157, label=print(paste0("RMSE = ", round(rmse_ice_on, 2))),
+           color="Maroon")+
+  labs(x= "Predicted Dates",y= "Observed Dates", fill = "", col="", title = "Predictive performance plot of Ice-on dates ")+
+  theme(
+    axis.text = element_text(size = rel(1.5)),
+    axis.title.y = element_text(size = rel(2)),
+    axis.title.x = element_text(size = rel(2)),
+    legend.title = element_text( size = 17,vjust = .5),
+    legend.text = element_text(size = 14),
+    plot.title = element_text(size=22))+
+  scale_color_manual( values = c("Fit" = "red",
+                                 "X = Y" = "blue"))
+
+ggsave(here::here("Data","Models","compared","ice_on_svm_model.png"),  width = 8, height = 8, units = 'in', dpi = 300)
+```
+
+### Ice-off
+
+```{r}
+#| warning: false
+#| eval: false
+
+
+custom <- trainControl(method = "repeatedcv",
+                       number = 10,
+                       repeats = 5,
+                       verboseIter = TRUE)
+
+
+cl <- makeCluster(detectCores()-1)
+registerDoParallel(cl)
+
+
+set.seed(2007)
+ice_off_xg <- caret::train(ice_off_doy_imputed~.,
+                   NH_train_ice_off,
+                   method='svmRadial',
+                   preProcess = c("center", "scale"),
+                   tuneGrid = expand.grid(C = c(0.75, 0.9, 1, 1.1, 1.25),
+                                          sigma = c(.01, .015, 0.2)),
+                   trControl=custom,
+                   allowParallel = TRUE)
+
+stopCluster(cl)
+
+write_rds(ice_off_xg ,here::here("Data","Models","compared","ice_off_svm_model.rds"))
+
+```
+
+```{r}
+#| warning: false
+#| eval: false
+
+ice_off_rf <- read_rds(here::here("Data","Models","compared","ice_off_svm_model.rds"))
+
+NH_ice_off_pred <- tibble(s1 = predict(ice_off_rf,NH_test_ice_off[, -1]))
+
+eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)
+
+
+r_sq <- eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)[,1]
+rmse_ice_off <- eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)[,2]
+mae_ice_off <- eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)[,3]
+
+
+
+NH_ice_off_pred_actual <- bind_cols(NH_test_ice_off[,1],
+                                   NH_ice_off_pred) %>% 
+  rename("NH_ice_off_true" = "ice_off_doy_imputed",
+         "NH_ice_off_pred" = "s1")
+
+NH_ice_off_pred_actual %>%
+  ggplot(aes(NH_ice_off_pred, NH_ice_off_true))+
+  geom_point(aes(fill = "Data"))+
+  geom_smooth(method = "lm", se=FALSE, aes(color = "Fit"))+
+  stat_regline_equation(label.x= 32, label.y=150, color = "Maroon")+
+  stat_cor(aes(label=..rr.label..), label.x=32, label.y=145, color = "Maroon")+
+  geom_abline(intercept = 0, col = "Blue", size = .8)+
+  annotate(geom="text", x= 47, y=165, label= print(paste0("MAE = ", round(mae_ice_off, 2))),
+           color="Maroon")+
+  annotate(geom="text", x= 48, y=157, label=print(paste0("RMSE = ", round(rmse_ice_off, 2))),
+           color="Maroon")+
+  labs(x= "Predicted Dates",y= "Observed Dates", fill = "", col="", title = "Predictive performance plot of Ice-off dates ")+
+  theme(
+    axis.text = element_text(size = rel(1.5)),
+    axis.title.y = element_text(size = rel(2)),
+    axis.title.x = element_text(size = rel(2)),
+    legend.title = element_text( size = 17,vjust = .5),
+    legend.text = element_text(size = 14),
+    plot.title = element_text(size=22))+
+  scale_color_manual( values = c("Fit" = "red",
+                                 "X = Y" = "blue"))
+
+ggsave(here::here("Data","Models","compared","ice_off_svm_model.png"),  width = 8, height = 8, units = 'in', dpi = 300)
+```
+
+## K-nearest neighbors
+
+### Ice-on
+
+```{r}
+#| warning: false
+
+
+custom <- trainControl(method = "repeatedcv",
+                       number = 10,
+                       repeats = 5,
+                       verboseIter = TRUE)
+
+
+cl <- makeCluster(detectCores()-1)
+registerDoParallel(cl)
+
+
+set.seed(2007)
+ice_on_knn <- caret::train(ice_on_doy_imputed~.,
+                   NH_train_ice_on,
+                   method='knn',
+                   preProcess = c("center", "scale"),
+                   tuneGrid = expand.grid(k = c(1:15)),
+                   trControl=custom,
+                   allowParallel = TRUE)
+
+stopCluster(cl)
+
+write_rds(ice_on_knn,here::here("Data","Models","compared","ice_on_knn_model.rds"))
+
+
+```
+
+```{r}
+#| warning: false
+
+ice_on_dt <- read_rds(here::here("Data","Models","compared","ice_on_knn_model.rds"))
+
+NH_ice_on_pred <- tibble(s1 = predict(ice_on_dt,NH_test_ice_on[, -1]))
+
+eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)
+
+r_sq <-eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)[,1]
+rmse_ice_on <- eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)[,2]
+mae_ice_on <- eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)[,3]
+
+
+
+NH_ice_on_pred_actual <- bind_cols(NH_test_ice_on[,1],
+                                   NH_ice_on_pred) %>% 
+  rename("NH_ice_on_true" = "ice_on_doy_imputed",
+         "NH_ice_on_pred" = "s1")
+
+NH_ice_on_pred_actual %>%
+  ggplot(aes(NH_ice_on_pred, NH_ice_on_true))+
+  geom_point(aes(fill = "Data"))+
+  geom_smooth(method = "lm", se=FALSE, aes(color = "Fit"))+
+  stat_regline_equation(label.x= 32, label.y=150, color = "Maroon")+
+  stat_cor(aes(label=..rr.label..), label.x=32, label.y=145, color = "Maroon")+
+  geom_abline(intercept = 0, col = "Blue", size = .8)+
+  annotate(geom="text", x= 47, y=165, label= print(paste0("MAE = ", round(mae_ice_on, 2))),
+           color="Maroon")+
+  annotate(geom="text", x= 48, y=157, label=print(paste0("RMSE = ", round(rmse_ice_on, 2))),
+           color="Maroon")+
+  labs(x= "Predicted Dates",y= "Observed Dates", fill = "", col="", title = "Predictive performance plot of Ice-on dates ")+
+  theme(
+    axis.text = element_text(size = rel(1.5)),
+    axis.title.y = element_text(size = rel(2)),
+    axis.title.x = element_text(size = rel(2)),
+    legend.title = element_text( size = 17,vjust = .5),
+    legend.text = element_text(size = 14),
+    plot.title = element_text(size=22))+
+  scale_color_manual( values = c("Fit" = "red",
+                                 "X = Y" = "blue"))
+
+ggsave(here::here("Data","Models","compared","ice_on_knn_model.png"),  width = 8, height = 8, units = 'in', dpi = 300)
+```
+
+### Ice-off
+
+```{r}
+#| warning: false
+
+
+custom <- trainControl(method = "repeatedcv",
+                       number = 10,
+                       repeats = 5,
+                       verboseIter = TRUE)
+
+
+cl <- makeCluster(detectCores()-1)
+registerDoParallel(cl)
+
+
+set.seed(2007)
+ice_off_knn <- caret::train(ice_off_doy_imputed~.,
+                   NH_train_ice_off,
+                   method='knn',
+                   preProcess = c("center", "scale"),
+                   tuneGrid = expand.grid(k = c(1:15)),
+                   trControl=custom,
+                   allowParallel = TRUE)
+
+stopCluster(cl)
+
+write_rds(ice_off_knn,here::here("Data","Models","compared","ice_off_knn_model.rds"))
+
+```
+
+```{r}
+#| warning: false
+
+ice_off_rf <- read_rds(here::here("Data","Models","compared","ice_off_knn_model.rds"))
+
+NH_ice_off_pred <- tibble(s1 = predict(ice_off_rf,NH_test_ice_off[, -1]))
+
+eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)
+
+
+r_sq <- eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)[,1]
+rmse_ice_off <- eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)[,2]
+mae_ice_off <- eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)[,3]
+
+
+
+NH_ice_off_pred_actual <- bind_cols(NH_test_ice_off[,1],
+                                   NH_ice_off_pred) %>% 
+  rename("NH_ice_off_true" = "ice_off_doy_imputed",
+         "NH_ice_off_pred" = "s1")
+
+NH_ice_off_pred_actual %>%
+  ggplot(aes(NH_ice_off_pred, NH_ice_off_true))+
+  geom_point(aes(fill = "Data"))+
+  geom_smooth(method = "lm", se=FALSE, aes(color = "Fit"))+
+  stat_regline_equation(label.x= 32, label.y=150, color = "Maroon")+
+  stat_cor(aes(label=..rr.label..), label.x=32, label.y=145, color = "Maroon")+
+  geom_abline(intercept = 0, col = "Blue", size = .8)+
+  annotate(geom="text", x= 47, y=165, label= print(paste0("MAE = ", round(mae_ice_off, 2))),
+           color="Maroon")+
+  annotate(geom="text", x= 48, y=157, label=print(paste0("RMSE = ", round(rmse_ice_off, 2))),
+           color="Maroon")+
+  labs(x= "Predicted Dates",y= "Observed Dates", fill = "", col="", title = "Predictive performance plot of Ice-off dates ")+
+  theme(
+    axis.text = element_text(size = rel(1.5)),
+    axis.title.y = element_text(size = rel(2)),
+    axis.title.x = element_text(size = rel(2)),
+    legend.title = element_text( size = 17,vjust = .5),
+    legend.text = element_text(size = 14),
+    plot.title = element_text(size=22))+
+  scale_color_manual( values = c("Fit" = "red",
+                                 "X = Y" = "blue"))
+
+ggsave(here::here("Data","Models","compared","ice_off_knn_model.png"),  width = 8, height = 8, units = 'in', dpi = 300)
+```
+
+## Artificial Neural Net
+
+### Ice-on
+
+```{r}
+#| warning: false
+
+custom <- trainControl(method = "repeatedcv",
+                       number = 10,
+                       repeats = 5,
+                       verboseIter = TRUE)
+
+
+cl <- makeCluster(detectCores()-1)
+registerDoParallel(cl)
+
+
+set.seed(2007)
+ice_on_ann <- caret::train(ice_on_doy_imputed~.,
+                   NH_train_ice_on,
+                   method='nnet',
+                   preProcess = c("center", "scale"),
+                   tuneGrid = expand.grid(size = seq(from = 1, to = 30, by = 3),
+                        decay = seq(from = 0.1, to = 0.5, by = 0.1)),
+                   trControl=custom,
+                   maxit = 1500,
+                   linout = 1)
+
+stopCluster(cl)
+
+write_rds(ice_on_ann,here::here("Data","Models","compared","ice_on_ann_model.rds"))
+```
+
+```{r}
+#| warning: false
+
+ice_on_dt <- read_rds(here::here("Data","Models","compared","ice_on_ann_model.rds"))
+
+NH_ice_on_pred <- tibble(s1 = predict(ice_on_dt,NH_test_ice_on[, -1]))
+
+eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)
+
+r_sq <-eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)[,1]
+rmse_ice_on <- eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)[,2]
+mae_ice_on <- eval_results(NH_test_ice_on$ice_on_doy_imputed,NH_ice_on_pred)[,3]
+
+
+
+NH_ice_on_pred_actual <- bind_cols(NH_test_ice_on[,1],
+                                   NH_ice_on_pred) %>% 
+  rename("NH_ice_on_true" = "ice_on_doy_imputed",
+         "NH_ice_on_pred" = "s1")
+
+NH_ice_on_pred_actual %>%
+  ggplot(aes(NH_ice_on_pred, NH_ice_on_true))+
+  geom_point(aes(fill = "Data"))+
+  geom_smooth(method = "lm", se=FALSE, aes(color = "Fit"))+
+  stat_regline_equation(label.x= 32, label.y=150, color = "Maroon")+
+  stat_cor(aes(label=..rr.label..), label.x=32, label.y=145, color = "Maroon")+
+  geom_abline(intercept = 0, col = "Blue", size = .8)+
+  annotate(geom="text", x= 47, y=165, label= print(paste0("MAE = ", round(mae_ice_on, 2))),
+           color="Maroon")+
+  annotate(geom="text", x= 48, y=157, label=print(paste0("RMSE = ", round(rmse_ice_on, 2))),
+           color="Maroon")+
+  labs(x= "Predicted Dates",y= "Observed Dates", fill = "", col="", title = "Predictive performance plot of Ice-on dates ")+
+  theme(
+    axis.text = element_text(size = rel(1.5)),
+    axis.title.y = element_text(size = rel(2)),
+    axis.title.x = element_text(size = rel(2)),
+    legend.title = element_text( size = 17,vjust = .5),
+    legend.text = element_text(size = 14),
+    plot.title = element_text(size=22))+
+  scale_color_manual( values = c("Fit" = "red",
+                                 "X = Y" = "blue"))
+
+ggsave(here::here("Data","Models","compared","ice_on_ann_model.png"),  width = 8, height = 8, units = 'in', dpi = 300)
+```
+
+### Ice-off
+
+```{r}
+#| warning: false
+
+custom <- trainControl(method = "repeatedcv",
+                       number = 10,
+                       repeats = 5,
+                       verboseIter = TRUE)
+
+
+cl <- makeCluster(detectCores()-1)
+registerDoParallel(cl)
+
+
+set.seed(2007)
+ice_off_ann <- caret::train(ice_off_doy_imputed~.,
+                   NH_train_ice_off,
+                   method='nnet',
+                   preProcess = c("center", "scale"),
+                   tuneGrid = expand.grid(size = seq(from = 1, to = 30, by = 3),
+                        decay = seq(from = 0.1, to = 0.5, by = 0.1)),
+                   trControl=custom,
+                   maxit = 1500,
+                   linout = 1)
+
+stopCluster(cl)
+
+write_rds(ice_off_ann,here::here("Data","Models","compared","ice_off_ann_model.rds"))
+```
+
+```{r}
+#| warning: false
+
+ice_off_rf <- read_rds(here::here("Data","Models","compared","ice_off_ann_model.rds"))
+
+NH_ice_off_pred <- tibble(s1 = predict(ice_off_rf,NH_test_ice_off[, -1]))
+
+eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)
+
+
+r_sq <- eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)[,1]
+rmse_ice_off <- eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)[,2]
+mae_ice_off <- eval_results(NH_test_ice_off$ice_off_doy_imputed,NH_ice_off_pred)[,3]
+
+
+
+NH_ice_off_pred_actual <- bind_cols(NH_test_ice_off[,1],
+                                   NH_ice_off_pred) %>% 
+  rename("NH_ice_off_true" = "ice_off_doy_imputed",
+         "NH_ice_off_pred" = "s1")
+
+NH_ice_off_pred_actual %>%
+  ggplot(aes(NH_ice_off_pred, NH_ice_off_true))+
+  geom_point(aes(fill = "Data"))+
+  geom_smooth(method = "lm", se=FALSE, aes(color = "Fit"))+
+  stat_regline_equation(label.x= 32, label.y=150, color = "Maroon")+
+  stat_cor(aes(label=..rr.label..), label.x=32, label.y=145, color = "Maroon")+
+  geom_abline(intercept = 0, col = "Blue", size = .8)+
+  annotate(geom="text", x= 47, y=165, label= print(paste0("MAE = ", round(mae_ice_off, 2))),
+           color="Maroon")+
+  annotate(geom="text", x= 48, y=157, label=print(paste0("RMSE = ", round(rmse_ice_off, 2))),
+           color="Maroon")+
+  labs(x= "Predicted Dates",y= "Observed Dates", fill = "", col="", title = "Predictive performance plot of Ice-off dates ")+
+  theme(
+    axis.text = element_text(size = rel(1.5)),
+    axis.title.y = element_text(size = rel(2)),
+    axis.title.x = element_text(size = rel(2)),
+    legend.title = element_text( size = 17,vjust = .5),
+    legend.text = element_text(size = 14),
+    plot.title = element_text(size=22))+
+  scale_color_manual( values = c("Fit" = "red",
+                                 "X = Y" = "blue"))
+
+ggsave(here::here("Data","Models","compared","ice_off_ann_model.png"),  width = 8, height = 8, units = 'in', dpi = 300)
+```
